@@ -4,7 +4,8 @@ Back is a Concurrent Forth implementation, have fun
 
 # Building
 the only dependency for backvm is the Go compiler
-so just run :
+
+Backvm doesn't need anything fancy, so just run :
 ```shell
 go build
 ```
