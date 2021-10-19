@@ -1,5 +1,11 @@
 package main
 
+import (
+	"os"
+	"fmt"
+	"io/ioutil"
+)
+
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Println("Invalid argument count.")
