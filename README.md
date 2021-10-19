@@ -8,3 +8,6 @@ so just run :
 ```shell
 go build
 ```
+
+# License
+backvm is licensed under the `GPL-3.0` license
