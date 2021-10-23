@@ -6,9 +6,11 @@ import (
 	"io/ioutil"
 	"strings"
 	"strconv"
+	"sync"
 )
 
-channel_mapper := make(map[int]chan int)
+var channel_mapper map[int]chan int
+var waiter sync.WaitGroup
 
 func pop(list *[]int) int {
 	var x int
@@ -22,6 +24,7 @@ func pop(list *[]int) int {
 
 func backsend(val int, id int) {
 	channel_mapper[id] <- val
+	waiter.Done()
 }
 
 func execute(bytecode []int) {
@@ -87,6 +90,7 @@ func execute(bytecode []int) {
 			case 18:
 				//*/
 			case 19:
+				waiter.Add(1)
 				go backsend(pop(&stack), pop(&stack))
 			case 20:
 				stack = append(stack, <-channel_mapper[pop(&stack)])
@@ -97,9 +101,12 @@ func execute(bytecode []int) {
 				stack = append(stack, bytecode[iptr])
 		}
 	}
+	waiter.Done()
 }
 
 func parse(src []string) [][]int {
+	channel_mapper := make(map[int]chan int)
+
 	var sptr int
 	var code_list []int
 	var codes [][]int
@@ -135,7 +142,8 @@ func main() {
 	threads := parse(strings.Fields(string(data)))
 	var tptr int
 	for tptr = 0; tptr < len(threads); tptr++ {
+		waiter.Add(1)
 		go execute(threads[tptr])
 	}
-
+	waiter.Wait()
 }
