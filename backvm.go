@@ -25,8 +25,6 @@ func backsend(val int, id int) {
 }
 
 func execute(bytecode []int) {
-	//push = append(list, elem)
-	//pop = pop(list)
 	var stack []int
 	var iptr int
 	var skip bool
