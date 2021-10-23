@@ -7,6 +7,7 @@ import (
 	"strings"
 	"strconv"
 	"sync"
+	"unsafe"
 )
 
 var channel_mapper map[int]chan int
@@ -81,14 +82,23 @@ func execute(bytecode []int) {
 			case 14:
 				a, b := pop(&stack), pop(&stack)
 				stack = append(append(append(stack, b), a), b)
-			/*case 15:
+			case 15:
 				//
 			case 16:
 				//
 			case 17:
 				//
 			case 18:
-				//*/
+				address := fmt.Sprintf("%x", pop(&stack))
+				var adr uint64
+				adr, err := strconv.ParseUint(address, 0, 64)
+				if err != nil {
+					stack = append(stack, 1)
+					break
+				}
+				var ptr uintptr = uintptr(adr)
+				val := *(*int)(unsafe.Pointer(ptr))
+				stack = append(stack, val)
 			case 19:
 				waiter.Add(1)
 				go backsend(pop(&stack), pop(&stack))
