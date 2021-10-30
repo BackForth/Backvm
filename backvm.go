@@ -85,8 +85,8 @@ func getuptr(stack *[]int) UResult {
 
 func execute(bytecode []int, id int) {
 	var stack []int
-	var iptr int
-	var skip bool
+	var iptr, lptr, lpidx, max int
+	var skip, inloop bool
 	for iptr = 0; iptr < len(bytecode); iptr++ {
 		if skip {
 			if bytecode[iptr] == 9 {
@@ -192,6 +192,22 @@ func execute(bytecode []int, id int) {
 					recv(&stack, id, mutex)
 					counter += 1
 				}
+			case 24:
+				start, end := pop(&stack), pop(&stack)
+				inloop = true
+				max = end
+				lptr = start
+				lpidx = iptr
+			case 25:
+				if !inloop {
+					panic("Encounted `loop` word without previous `do` word.")
+				}
+				if lptr == max-1 {
+					inloop = false
+					continue
+				}
+				iptr = lpidx
+				lptr++
 		}
 	}
 	waiter.Done()
