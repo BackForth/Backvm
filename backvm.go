@@ -1,5 +1,9 @@
 package main
 
+// #cgo CFLAGS: -g -Wall
+// #include <stdlib.h>
+// #include "back.h"
+import "C"
 import (
 	"os"
 	"fmt"
@@ -18,6 +22,11 @@ type BackMutex struct {
 type Result struct {
 	success bool
 	ptr *int
+}
+
+type UResult struct {
+	success bool
+	ptr unsafe.Pointer
 }
 
 var mutexArr []BackMutex
@@ -47,6 +56,22 @@ func getptr(stack *[]int) Result {
 	}
 	var ptr uintptr = uintptr(adr)
 	res.ptr = (*int)(unsafe.Pointer(ptr))
+	return res
+}
+
+func getuptr(stack *[]int) UResult {
+	res := UResult{}
+	res.success = true
+	address := fmt.Sprintf("%x", pop(stack))
+	var adr uint64
+	adr, err := strconv.ParseUint(address, 0, 64)
+	if err != nil {
+		*stack = append(*stack, 1)
+		adr = 0
+		res.success = false
+	}
+	var ptr uintptr = uintptr(adr)
+	res.ptr = unsafe.Pointer(ptr)
 	return res
 }
 
@@ -105,9 +130,13 @@ func execute(bytecode []int, id int) {
 				a, b := pop(&stack), pop(&stack)
 				stack = append(append(append(stack, b), a), b)
 			case 15:
-				// alloc
+				val := int(C.alloc(C.int(pop(&stack))))
+				stack = append(stack, val)
 			case 16:
-				// free
+				reslt := getuptr(&stack)
+				if reslt.success {
+					C.free(reslt.ptr)
+				}
 			case 17:
 				val, reslt := pop(&stack), getptr(&stack)
 				if reslt.success {
