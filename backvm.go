@@ -10,7 +10,18 @@ import (
 	"unsafe"
 )
 
-var channel_mapper map[int]chan int
+type BackMutex struct {
+	unlocked bool
+	mutex sync.Mutex
+}
+
+type Result struct {
+	success bool
+	ptr *int
+}
+
+var mutexArr []BackMutex
+var channelArr []chan int
 var waiter sync.WaitGroup
 
 func pop(list *[]int) int {
@@ -23,12 +34,23 @@ func pop(list *[]int) int {
 	return x
 }
 
-func backsend(val int, id int) {
-	channel_mapper[id] <- val
-	waiter.Done()
+func getptr(stack *[]int) Result {
+	res := Result{}
+	res.success = true
+	address := fmt.Sprintf("%x", pop(stack))
+	var adr uint64
+	adr, err := strconv.ParseUint(address, 0, 64)
+	if err != nil {
+		*stack = append(*stack, 1)
+		adr = 0
+		res.success = false
+	}
+	var ptr uintptr = uintptr(adr)
+	res.ptr = (*int)(unsafe.Pointer(ptr))
+	return res
 }
 
-func execute(bytecode []int) {
+func execute(bytecode []int, id int) {
 	var stack []int
 	var iptr int
 	var skip bool
@@ -83,27 +105,38 @@ func execute(bytecode []int) {
 				a, b := pop(&stack), pop(&stack)
 				stack = append(append(append(stack, b), a), b)
 			case 15:
-				//
+				// alloc
 			case 16:
-				//
+				// free
 			case 17:
-				//
-			case 18:
-				address := fmt.Sprintf("%x", pop(&stack))
-				var adr uint64
-				adr, err := strconv.ParseUint(address, 0, 64)
-				if err != nil {
-					stack = append(stack, 1)
-					break
+				val, reslt := pop(&stack), getptr(&stack)
+				if reslt.success {
+					*reslt.ptr = val
 				}
-				var ptr uintptr = uintptr(adr)
-				val := *(*int)(unsafe.Pointer(ptr))
-				stack = append(stack, val)
+			case 18:
+				reslt := getptr(&stack)
+				if reslt.success {
+					stack = append(stack, *reslt.ptr)
+				}
 			case 19:
+				val, idx := pop(&stack), pop(&stack)
 				waiter.Add(1)
-				go backsend(pop(&stack), pop(&stack))
+				go func(mutex *BackMutex, msg chan int){
+					(*mutex).mutex.Lock()
+					(*mutex).unlocked = false
+					msg <- val
+					waiter.Done()
+				}(&mutexArr[idx], channelArr[idx])
 			case 20:
-				stack = append(stack, <-channel_mapper[pop(&stack)])
+				mutex, msg := &mutexArr[id], channelArr[id]
+				for {
+					if !(*mutex).unlocked {
+						break
+					}
+				}
+				stack = append(stack, <-msg)
+				mutex.mutex.Unlock()
+				mutex.unlocked = true
 			case 21:
 				os.Exit(pop(&stack))
 			case 22:
@@ -115,19 +148,19 @@ func execute(bytecode []int) {
 }
 
 func parse(src []string) [][]int {
-	channel_mapper := make(map[int]chan int)
-
 	var sptr int
 	var code_list []int
 	var codes [][]int
-	cptr := 0
 	for sptr = 0; sptr < len(src); sptr++ {
 		op, err := strconv.Atoi(src[sptr])
 		if err != nil {
-			channel_mapper[cptr] = make(chan int)
-			cptr++
+			tmp := BackMutex{}
+			tmp.unlocked = true
+			mutexArr = append(mutexArr, tmp)
+			channelArr = append(channelArr, make(chan int))
 			if len(code_list) != 0 {
 				codes = append(codes, code_list)
+				code_list = []int{}
 			}
 		} else {
 			code_list = append(code_list, op)
@@ -150,10 +183,12 @@ func main() {
 	}
 
 	threads := parse(strings.Fields(string(data)))
+
 	var tptr int
+	fmt.Println()
 	for tptr = 0; tptr < len(threads); tptr++ {
 		waiter.Add(1)
-		go execute(threads[tptr])
+		go execute(threads[tptr], tptr)
 	}
 	waiter.Wait()
 }
