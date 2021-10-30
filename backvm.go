@@ -17,6 +17,7 @@ import (
 type BackMutex struct {
 	unlocked bool
 	mutex sync.Mutex
+	sender int
 }
 
 type Result struct {
@@ -41,6 +42,13 @@ func pop(list *[]int) int {
 	}
 	x, *list = tm[len(tm)-1], tm[:len(tm)-1]
 	return x
+}
+
+func recv(stack *[]int, chid int, mtx *BackMutex) {
+	*stack = append(*stack, <-channelArr[chid])
+	(*mtx).mutex.Unlock()
+	(*mtx).unlocked = true
+	(*mtx).sender = -1
 }
 
 func getptr(stack *[]int) Result {
@@ -153,24 +161,37 @@ func execute(bytecode []int, id int) {
 				go func(mutex *BackMutex, msg chan int){
 					(*mutex).mutex.Lock()
 					(*mutex).unlocked = false
+					(*mutex).sender = id
 					msg <- val
 					waiter.Done()
 				}(&mutexArr[idx], channelArr[idx])
 			case 20:
-				mutex, msg := &mutexArr[id], channelArr[id]
+				mutex := &mutexArr[id]
 				for {
 					if !(*mutex).unlocked {
 						break
 					}
 				}
-				stack = append(stack, <-msg)
-				mutex.mutex.Unlock()
-				mutex.unlocked = true
+				recv(&stack, id, mutex)
 			case 21:
 				os.Exit(pop(&stack))
 			case 22:
 				iptr++
 				stack = append(stack, bytecode[iptr])
+			case 23:
+				mutex, num := &mutexArr[id], pop(&stack)
+				counter := 0
+				for {
+					if counter == num {
+						break
+					}
+					mtx := *mutex
+					if mtx.unlocked {
+						continue
+					}
+					recv(&stack, id, mutex)
+					counter += 1
+				}
 		}
 	}
 	waiter.Done()
