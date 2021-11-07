@@ -1,6 +1,6 @@
-#ifndef _BACK_VM
-#define _BACK_VM
+#ifndef _BACK_MEM_API
+#define _BACK_MEM_API
 
-int alloc(int size);
+unsigned long long alloc(int size);
 
 #endif
