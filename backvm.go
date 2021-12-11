@@ -6,34 +6,31 @@ package main
 import "C"
 import (
 	"os"
-	"fmt"
 	"io/ioutil"
+	"fmt"
 	"strings"
 	"strconv"
 	"sync"
 	"unsafe"
 )
 
+type state struct {
+	bytecode []int
+	id int
+	vars map[int]int
+	stack *[]int
+	iptr int
+	lptr int
+	lpidx int
+	max int
+	skip bool
+	inloop bool
+}
+
 type BackMutex struct {
 	unlocked bool
 	mutex sync.Mutex
-	sender int
 }
-
-type Result struct {
-	success bool
-	ptr *int
-}
-
-type UResult struct {
-	success bool
-	ptr unsafe.Pointer
-}
-
-var vars map[int]int
-var mutexArr []BackMutex
-var channelArr []chan int
-var waiter sync.WaitGroup
 
 func pop(list *[]int) int {
 	var x int
@@ -45,180 +42,32 @@ func pop(list *[]int) int {
 	return x
 }
 
+func push(list *[]int, item int) {
+	*list = append(*list, item)
+}
+
 func recv(stack *[]int, chid int, mtx *BackMutex) {
 	*stack = append(*stack, <-channelArr[chid])
 	(*mtx).mutex.Unlock()
 	(*mtx).unlocked = true
-	(*mtx).sender = -1
 }
 
-func getptr(stack *[]int) Result {
-	res := Result{}
-	res.success = true
+func getptr(stack *[]int) (bool,uintptr) {
 	address := fmt.Sprintf("0x%x", pop(stack))
 	adr, err := strconv.ParseInt(address, 0, 64)
 	if err != nil {
-		panic(err)
 		*stack = append(*stack, 1)
-		res.success = false
-		return res
+		return false, 0
 	}
-	res.ptr = (*int)(unsafe.Pointer(uintptr(adr)))
-	return res
+	return true, uintptr(adr)
 }
 
-func getuptr(stack *[]int) UResult {
-	res := UResult{}
-	res.success = true
-	address := fmt.Sprintf("0x%x", pop(stack))
-	var adr uint64
-	adr, err := strconv.ParseUint(address, 0, 64)
-	if err != nil {
-		*stack = append(*stack, 1)
-		adr = 0
-		res.success = false
-	}
-	res.ptr = unsafe.Pointer(uintptr(adr))
-	return res
+func unsp(a uintptr) unsafe.Pointer {
+	return unsafe.Pointer(a)
 }
 
-func execute(bytecode []int, id int) {
-	var stack []int
-	var iptr, lptr, lpidx, max int
-	var skip, inloop bool
-	for iptr = 0; iptr < len(bytecode); iptr++ {
-		if skip {
-			if bytecode[iptr] == 9 {
-				skip = false
-			}
-			continue
-		}
-		switch bytecode[iptr] {
-			case 1:
-				fmt.Print(pop(&stack))
-			case 2:
-				var in int
-				fmt.Scanf("%d", &in)
-				stack = append(stack, in)
-			case 3:
-				fmt.Print(string(pop(&stack)))
-			case 4:
-				stack = append(stack, pop(&stack)+pop(&stack))
-			case 5:
-				a := pop(&stack)
-				stack = append(stack, pop(&stack)-a)
-			case 6:
-				stack = append(stack, pop(&stack)*pop(&stack))
-			case 7:
-				a := pop(&stack)
-				stack = append(stack, pop(&stack)/a)
-			case 8:
-				a := pop(&stack)
-				stack = append(stack, pop(&stack)%a)
-			case 9:
-				val := pop(&stack)
-				if val == 0 {
-					skip = true
-				}
-			case 10:
-				skip = false
-			case 11:
-				a := pop(&stack)
-				stack = append(append(stack, a), a)
-			case 12:
-				x3 := pop(&stack)
-				x2 := pop(&stack)
-				x1 := pop(&stack)
-				stack = append(append(append(stack, x2), x3), x1)
-			case 13:
-				a, b := pop(&stack), pop(&stack)
-				stack = append(append(stack, a), b)
-			case 14:
-				pop(&stack)
-			case 15:
-				a, b := pop(&stack), pop(&stack)
-				stack = append(append(append(stack, b), a), b)
-			case 16:
-				val := int(C.alloc(C.int(pop(&stack))))
-				stack = append(stack, val)
-
-			case 17:
-				reslt := getuptr(&stack)
-				if reslt.success {
-					C.free(reslt.ptr)
-				}
-			case 18:
-				reslt := getptr(&stack) 
-				if reslt.success {
-					*reslt.ptr = pop(&stack)
-				}	
-			case 19:
-				reslt := getptr(&stack)
-				if reslt.success {
-					stack = append(stack, *reslt.ptr)
-				}
-			case 20:
-				val, idx := pop(&stack), pop(&stack)
-				waiter.Add(1)
-				go func(mutex *BackMutex, msg chan int){
-					(*mutex).mutex.Lock()
-					(*mutex).unlocked = false
-					(*mutex).sender = id
-					msg <- val
-					waiter.Done()
-				}(&mutexArr[idx], channelArr[idx])
-			case 21:
-				mutex := &mutexArr[id]
-				for {
-					if !(*mutex).unlocked {
-						break
-					}
-				}
-				recv(&stack, id, mutex)
-			case 22:
-				mutex, num := &mutexArr[id], pop(&stack)
-				counter := 0
-				for {
-					if counter == num {
-						break
-					}
-					mtx := *mutex
-					if mtx.unlocked {
-						continue
-					}
-					recv(&stack, id, mutex)
-					counter += 1
-				}
-			case 23:
-				os.Exit(pop(&stack))
-			case 24:
-				start, end := pop(&stack), pop(&stack)
-				inloop = true
-				max = end
-				lptr = start
-				lpidx = iptr
-			case 25:
-				if !inloop {
-					panic("Encounted `loop` word without previous `do` word.")
-				}
-				if lptr == max-1 {
-					inloop = false
-					continue
-				}
-				iptr = lpidx
-				lptr++
-			case 26:
-				iptr++
-				stack = append(stack, bytecode[iptr])
-			case 27:
-				iptr++
-				vars[bytecode[iptr]] = pop(&stack)
-			case 28:
-				iptr++
-				stack = append(stack, vars[bytecode[iptr]])
-		}
-	}
-	waiter.Done()
+func intp(a uintptr) *int {
+	return (*int)(unsafe.Pointer(a))
 }
 
 func parse(src []string) [][]int {
@@ -244,6 +93,10 @@ func parse(src []string) [][]int {
 	return codes
 }
 
+var mutexArr []BackMutex
+var channelArr []chan int
+var waiter sync.WaitGroup
+
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Println("Invalid argument count.")
@@ -257,7 +110,6 @@ func main() {
 	}
 
 	threads := parse(strings.Fields(string(data)))
-	vars = make(map[int]int)
 
 	var tptr int
 	fmt.Println()
@@ -266,4 +118,187 @@ func main() {
 		go execute(threads[tptr], tptr)
 	}
 	waiter.Wait()
+}
+
+func initState(bytecode []int, id int, stat *state) {
+	tm := state{}
+	tm.bytecode = bytecode
+	tm.id = id
+	tm.vars = make(map[int]int)
+	tm.stack = &([]int{})
+	tm.lptr = 0
+	tm.lpidx = 0
+	tm.max = 0
+	tm.skip = false
+	tm.inloop = false
+	(*stat) = tm
+}
+
+var fncm map[int]func(*state) = map[int]func(*state){
+	0: func(*state){},
+	1: func(s *state) {
+		(*s).iptr++
+		push((*s).stack, (*s).bytecode[(*s).iptr])
+	},
+	2: func(s *state) {
+		fmt.Print(pop((*s).stack))
+	},
+	3: func(s *state) {
+		var in int
+		fmt.Scanf("%d", &in)
+		push((*s).stack, in)
+	},
+	4: func(s *state) {
+		fmt.Print(string(pop((*s).stack)))
+	},
+	5: func(s *state) {
+		push((*s).stack, pop((*s).stack)+pop((*s).stack))
+	},
+	6: func(s *state) {
+		a := pop((*s).stack)
+		push((*s).stack, pop((*s).stack)-a)
+	},
+	7: func(s *state) {
+		push((*s).stack, pop((*s).stack)*pop((*s).stack))
+	},
+	8: func(s *state) {
+		a := pop((*s).stack)
+		push((*s).stack, pop((*s).stack)/a)
+	},
+	9: func(s *state) {
+		a := pop((*s).stack)
+		push((*s).stack, pop((*s).stack)%a)
+	},
+	10: func(s *state) {
+		if pop((*s).stack) == 0 {
+			(*s).skip = true
+		}
+	},
+	11: func(s *state) {
+		(*s).skip = false
+	},
+	12: func(s *state) {
+		a := pop((*s).stack)
+		push((*s).stack, a)
+		push((*s).stack, a)
+	},
+	13: func(s *state) {
+		x3 := pop((*s).stack)
+		x2 := pop((*s).stack)
+		x1 := pop((*s).stack)
+		push((*s).stack, x2)
+		push((*s).stack, x3)
+		push((*s).stack, x1)
+	},
+	14: func(s *state) {
+		a, b := pop((*s).stack), pop((*s).stack)
+		push((*s).stack, a)
+		push((*s).stack, b)
+	},
+	15: func(s *state) {
+		pop((*s).stack)
+	},
+	16: func(s *state) {
+		a, b := pop((*s).stack), pop((*s).stack)
+		push((*s).stack, b)
+		push((*s).stack, a)
+		push((*s).stack, b)
+	},
+	17: func(s *state) {
+		val := int(C.alloc(C.int(pop((*s).stack))))
+		push((*s).stack, val)
+	},
+	18: func(s *state) {
+		reslt, ad := getptr((*s).stack)
+		p := unsp(ad)
+		if reslt {
+			C.free(p)
+		}
+	},
+	19: func(s *state) {
+		reslt, ad := getptr((*s).stack)
+		p := intp(ad)
+		if reslt {	
+			*p = pop((*s).stack)
+		}
+	},
+	20: func(s *state) {
+		reslt, ad := getptr((*s).stack)
+		p := intp(ad)
+		if reslt {
+			push((*s).stack, *p)
+		}
+	},
+	21: func(s *state) {
+		val, idx := pop((*s).stack), pop((*s).stack)
+		waiter.Add(1)
+		go func(mutex *BackMutex, msg chan int){
+			(*mutex).mutex.Lock()
+			(*mutex).unlocked = false
+			msg <- val
+			waiter.Done()
+		}(&mutexArr[idx], channelArr[idx])
+	},
+	22: func(s *state) {
+		mutex := &mutexArr[(*s).id]
+		for {
+			if !(*mutex).unlocked {
+				break
+			}
+		}
+		recv((*s).stack, (*s).id, mutex)
+	},
+	23: func(s *state) {
+		mutex, num := &mutexArr[(*s).id], pop((*s).stack)
+		for counter := 0; counter < (num);counter++ {
+			if (*mutex).unlocked {
+				continue
+			}
+			recv((*s).stack, (*s).id, mutex)
+		}
+	},
+	24: func(s *state) {
+		os.Exit(pop((*s).stack))
+	},
+	25: func(s *state) {
+		start, end := pop((*s).stack), pop((*s).stack)
+		(*s).inloop = true
+		(*s).max = end
+		(*s).lptr = start
+		(*s).lpidx = (*s).iptr
+	},
+	26: func(s *state) {
+		if !(*s).inloop {
+			panic("Encounted `loop` word without previous `do` word.")
+		}
+		if (*s).lptr == (*s).max-1 {
+			(*s).inloop = false
+			return//continue
+		}
+		(*s).iptr = (*s).lpidx
+		(*s).lptr++
+	},
+	27: func(s *state) {
+		(*s).iptr++
+		(*s).vars[(*s).bytecode[(*s).iptr]] = pop((*s).stack)
+	},
+	28: func(s *state) {
+		(*s).iptr++
+		push((*s).stack, (*s).vars[(*s).bytecode[(*s).iptr]])
+	},
+}
+
+func execute(bytecode []int, id int) {
+	machine := state{}
+	initState(bytecode, id, &machine)
+	for machine.iptr = 0;machine.iptr < len(bytecode);machine.iptr++ {
+		if machine.skip {
+			if bytecode[machine.iptr] == 11 {
+				fncm[9](&machine)
+			}
+			continue
+		}
+		fncm[bytecode[machine.iptr]](&machine)
+	}
+	waiter.Done()
 }
