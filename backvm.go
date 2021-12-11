@@ -25,6 +25,9 @@ type state struct {
 	max int
 	skip bool
 	inloop bool
+	opcode int
+	collect bool
+	ops []int
 }
 
 type BackMutex struct {
@@ -110,12 +113,20 @@ func main() {
 	}
 
 	threads := parse(strings.Fields(string(data)))
+	fncm[30] = func(s *state) {
+		ops := (*s).ops
+		fncm[(*s).opcode] = func(st *state){
+			execute(ops, (*s).id, true)
+		}
+		(*s).ops = []int{}
+		(*s).collect = false
+	}
 
 	var tptr int
 	fmt.Println()
 	for tptr = 0; tptr < len(threads); tptr++ {
 		waiter.Add(1)
-		go execute(threads[tptr], tptr)
+		go execute(threads[tptr], tptr, false)
 	}
 	waiter.Wait()
 }
@@ -131,6 +142,9 @@ func initState(bytecode []int, id int, stat *state) {
 	tm.max = 0
 	tm.skip = false
 	tm.inloop = false
+	tm.opcode = 0
+	tm.ops = []int{}
+	tm.collect = false
 	(*stat) = tm
 }
 
@@ -286,9 +300,14 @@ var fncm map[int]func(*state) = map[int]func(*state){
 		(*s).iptr++
 		push((*s).stack, (*s).vars[(*s).bytecode[(*s).iptr]])
 	},
+	29: func(s *state) {
+		(*s).iptr++
+		(*s).opcode = (*s).bytecode[(*s).iptr]
+		(*s).collect = true
+	},
 }
 
-func execute(bytecode []int, id int) {
+func execute(bytecode []int, id int, single bool) {
 	machine := state{}
 	initState(bytecode, id, &machine)
 	for machine.iptr = 0;machine.iptr < len(bytecode);machine.iptr++ {
@@ -297,8 +316,18 @@ func execute(bytecode []int, id int) {
 				fncm[9](&machine)
 			}
 			continue
+		} else if machine.collect {
+			if bytecode[machine.iptr] == 30 {
+				fncm[30](&machine)
+				continue
+			}
+			machine.ops = append(machine.ops, bytecode[machine.iptr])
+			continue
 		}
 		fncm[bytecode[machine.iptr]](&machine)
+	}
+	if single {
+		return
 	}
 	waiter.Done()
 }
